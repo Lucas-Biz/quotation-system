@@ -16,6 +16,8 @@
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+    <!-- Supabase Client (Cloud Database) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2@latest/dist/umd/supabase.min.js"></script>
     <style>
         :root {
             --sidebar-w: 240px;
@@ -1505,34 +1507,37 @@ function getLatestCost(code, name) {
     return _getLatestCostFrom('cw_latestCosts', code, name) || _getLatestCostFrom('cw_costRecords', code, name);
 }
 
-// ==================== CLOUD SYNC (jsonstorage.net — 零註冊) ====================
+// ==================== CLOUD SYNC (Supabase — 真正的雲端數據庫) ====================
+const SUPABASE_URL = 'https://xidxgflkngdayceejwdj.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_Rhp5UWYMCboUocsKwCofcQ_TU-Yt9pV';
+
+let _sbClient = null;
+function getSupabase() {
+    if (!_sbClient && typeof supabase !== 'undefined' && supabase.createClient) {
+        _sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    }
+    return _sbClient;
+}
+
 const cloudSync = {
-    API: 'https://api.jsonstorage.net/v1/json',
-    ready: false,         // 是否已獲取到雲端 ID
-    syncing: false,       // 是否正在同步中（防止重複）
+    ready: false,
+    syncing: false,
     syncQueue: new Set(),
     syncTimer: null,
-    _uid: '',             // jsonstorage userId
-    _iid: '',             // jsonstorage itemId
+    _uid: '',
+    _iid: 'supabase',
 
-    // 初始化：如果沒有 userId 就生成一個；讀取已有的 itemId
     init() {
-        let uid = localStorage.getItem('cw_js_uid');
+        let uid = localStorage.getItem('cw_sb_uid');
         if (!uid) {
-            uid = 'cw' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-            localStorage.setItem('cw_js_uid', uid);
+            uid = 'cw_sb_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+            localStorage.setItem('cw_sb_uid', uid);
         }
         this._uid = uid;
-        const iid = localStorage.getItem('cw_js_iid');
-        if (iid) {
-            this._iid = iid;
-            this.ready = true;
-            return true;
-        }
-        return false; // 還沒有雲端 item，等第一次 pushAll 時建立
+        const sb = getSupabase();
+        this.ready = !!sb;
+        return this.ready;
     },
-
-    _url() { return this.API + '/' + this._uid + '/' + this._iid; },
 
     // 收集全部 localStorage 數據打包成一個 JSON
     _collectAll() {
@@ -1545,6 +1550,7 @@ const cloudSync = {
             }
         }
         data._updated = new Date().toISOString();
+        data._source = this._uid;
         return data;
     },
 
@@ -1559,93 +1565,59 @@ const cloudSync = {
     },
 
     async pullAll() {
-        // If not ready, try to establish cloud storage by pushing local data
-        if (!this.ready) {
-            console.log('[Cloud] 尚未初始化，嘗試建立雲端備份...');
-            return this.pushAll();
-        }
+        const sb = getSupabase();
+        if (!sb) { console.warn('[Supabase] Client not available'); return false; }
+        this.ready = true;
         try {
-            // 5 秒 timeout，避免網絡差時長時間卡住
-            const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), 8000);
-            const resp = await fetch(this._url(), { signal: controller.signal });
-            clearTimeout(tid);
-            if (!resp.ok) {
-                if (resp.status === 404) {
-                    // 雲端不存在，推送本地數據上去
-                    await this.pushAll();
-                    return true;
-                }
-                console.warn('雲端拉取失敗 HTTP', resp.status);
-                return false;
-            }
-            const data = await resp.json();
-            if (data && typeof data === 'object') {
-                this._mergeFromCloud(data);
-                console.log('雲端數據已同步');
+            const { data, error } = await sb.from('store_data').select('data').eq('device_id', this._uid).maybeSingle();
+            if (error) { console.warn('[Supabase] Pull error:', error.message); return false; }
+            if (data && data.data) {
+                this._mergeFromCloud(data.data);
+                console.log('[Supabase] 雲端數據已同步 ✓');
                 return true;
             }
-            return false;
-        } catch(e) { console.warn('雲端拉取失敗:', e); return false; }
+            // No data yet on server — push local
+            return this.pushAll();
+        } catch(e) { console.warn('[Supabase] Pull failed:', e); return false; }
     },
 
     async pushAll() {
+        const sb = getSupabase();
+        if (!sb) { console.warn('[Supabase] Client not available'); return; }
+        this.ready = true;
         try {
-            const data = this._collectAll();
-            const body = JSON.stringify(data);
-            // 8 秒 timeout（push 資料量較大，給多一點時間）
-            const mkCtrl = () => { const c = new AbortController(); setTimeout(() => c.abort(), 8000); return c; };
-            let resp;
-            if (this.ready) {
-                // 更新現有 item
-                resp = await fetch(this._url(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, signal: mkCtrl().signal });
-            } else {
-                // 首次建立 item
-                resp = await fetch(this.API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: mkCtrl().signal });
-                if (resp.ok || resp.status === 201) {
-                    const result = await resp.json();
-                    const parts = result.uri.split('/');
-                    this._iid = parts[parts.length - 1];
-                    this._uid = parts[parts.length - 2];
-                    localStorage.setItem('cw_js_uid', this._uid);
-                    localStorage.setItem('cw_js_iid', this._iid);
-                    this.ready = true;
-                    console.log('雲端數據已建立');
-                    return;
-                }
-            }
-            if (!resp.ok) { console.warn('雲端推送失敗 HTTP', resp.status); }
-        } catch(e) { console.warn('雲端推送失敗:', e); }
+            const payload = this._collectAll();
+            const { error } = await sb.from('store_data').upsert(
+                { device_id: this._uid, data: payload, updated_at: new Date().toISOString() },
+                { onConflict: 'device_id' }
+            );
+            if (error) { console.warn('[Supabase] Push error:', error.message); }
+            else console.log('[Supabase] 數據已推送至雲端 ✓');
+        } catch(e) { console.warn('[Supabase] Push failed:', e); }
     },
 
     schedulePush(key) {
         this.syncQueue.add(key);
         if (this.syncTimer) clearTimeout(this.syncTimer);
-        this.syncTimer = setTimeout(() => this.flushQueue(), 800);
+        this.syncTimer = setTimeout(() => this.flushQueue(), 1000);
     },
 
     async flushQueue() {
         this.syncQueue.clear();
-        // 直接 pushAll 全部數據，因為 jsonstorage 只存一個大 JSON
         await this.pushAll();
     },
 
-    // 重置雲端 ID（相當於斷開舊數據，重新建立）
     reset() {
-        localStorage.removeItem('cw_js_iid');
-        this.ready = false;
-        this._iid = '';
-        this.syncQueue.clear();
-        if (this.syncTimer) clearTimeout(this.syncTimer);
-        this.syncTimer = null;
+        // Supabase doesn't need reset — just re-init
+        this.init();
     },
 
     async testConnection() {
-        if (!this.ready) return { ok: false, msg: '尚未同步過' };
+        const sb = getSupabase();
+        if (!sb) return { ok: false, msg: 'Supabase client 未載入' };
         try {
-            const resp = await fetch(this._url(), { method: 'HEAD' });
-            if (resp.ok) return { ok: true, msg: '已連接' };
-            return { ok: false, msg: 'HTTP ' + resp.status };
+            const { error } = await sb.from('store_data').select('device_id').eq('device_id', this._uid).maybeSingle();
+            return { ok: !error, msg: error ? error.message : '已連接 Supabase' };
         } catch(e) { return { ok: false, msg: e.message }; }
     }
 };
