@@ -1507,10 +1507,24 @@ function getLatestCost(code, name) {
 
 // ==================== CLOUD SYNC (Supabase — 真正的雲端數據庫) ====================
 // ==================== CLOUD SYNC (GitHub Gist API — 零依賴，純 fetch) ====================
-// 使用 GitHub Gist 作為雲端存儲，解決 Supabase DNS 無法解析的問題
-const GH_TOKEN = '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';
+// 使用 GitHub Gist 作為雲端存儲。首次使用需輸入 GitHub Token（存在 localStorage）
 const GH_GIST_DESC = 'cw-quotation-cloud-data';
 const GH_API = 'https://api.github.com';
+
+// 獲取 GitHub Token（從 localStorage 或提示用戶輸入）
+function _getGHToken() {
+    let t = localStorage.getItem('cw_gh_token');
+    if (!t || !t.startsWith('ghp_') && !t.startsWith('github_pat_')) {
+        t = prompt('🔑 請輸入你的 GitHub Personal Access Token：\n\n（只需輸入一次，之後會自動記住）\n\n去這裡生成: github.com/settings/tokens', t || '');
+        if (t && (t.startsWith('ghp_') || t.startsWith('github_pat_'))) {
+            localStorage.setItem('cw_gh_token', t);
+        } else {
+            console.warn('[☁️] 未提供有效的 GitHub Token，雲端同步不可用');
+            return null;
+        }
+    }
+    return t;
+}
 
 const cloudSync = {
     ready: true,
@@ -1520,7 +1534,9 @@ const cloudSync = {
     _gistId: null,
 
     _headers() {
-        return { 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json', 'Authorization': 'token ' + GH_TOKEN };
+        const t = _getGHToken();
+        if (!t) return {};
+        return { 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json', 'Authorization': 'token ' + t };
     },
 
     init() { this._gistId = localStorage.getItem('cw_gist_id'); this.ready = true; return true; },
