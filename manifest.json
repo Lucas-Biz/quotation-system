@@ -1,0 +1,30 @@
+{
+  "name": "進和集團報價系統",
+  "short_name": "進和報價",
+  "description": "進和集團 - 專業報價管理系統，支援多客戶報價、原單參考、Excel 匯出與雲端同步",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F5F6F8",
+  "theme_color": "#1B3A1B",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["business", "finance", "productivity"],
+  "lang": "zh-HK"
+}
