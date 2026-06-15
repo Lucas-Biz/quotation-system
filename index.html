@@ -1511,19 +1511,46 @@ function getLatestCost(code, name) {
 const GH_GIST_DESC = 'cw-quotation-cloud-data';
 const GH_API = 'https://api.github.com';
 
-// 獲取 GitHub Token（從 localStorage 或提示用戶輸入）
+// 獲取 GitHub Token（優先級：URL Hash > localStorage > 提示輸入）
+// 支援「一鍵連結」模式： cwv-qtst.netlify.app#t=github_pat_XXXXX
 function _getGHToken() {
-    let t = localStorage.getItem('cw_gh_token');
-    if (!t || !t.startsWith('ghp_') && !t.startsWith('github_pat_')) {
-        t = prompt('🔑 請輸入你的 GitHub Personal Access Token：\n\n（只需輸入一次，之後會自動記住）\n\n去這裡生成: github.com/settings/tokens', t || '');
-        if (t && (t.startsWith('ghp_') || t.startsWith('github_pat_'))) {
-            localStorage.setItem('cw_gh_token', t);
-        } else {
-            console.warn('[☁️] 未提供有效的 GitHub Token，雲端同步不可用');
-            return null;
+    // 1️⃣ 優先從 URL Hash 自動讀取（一鍵連結模式）
+    let hash = location.hash || '';
+    if (hash.startsWith('#t=')) {
+        let urlToken = decodeURIComponent(hash.substring(3));
+        if (urlToken && (urlToken.startsWith('ghp_') || urlToken.startsWith('github_pat_'))) {
+            localStorage.setItem('cw_gh_token', urlToken);
+            // 清除 URL 中的 Token（安全考量）
+            history.replaceState(null, '', location.pathname + location.search);
+            console.log('[☁️] 已從 URL 自動載入 Token ✓');
+            return urlToken;
         }
     }
-    return t;
+
+    // 2️⃣ 從 localStorage 讀取（之前保存過的）
+    let t = localStorage.getItem('cw_gh_token');
+    if (t && (t.startsWith('ghp_') || t.startsWith('github_pat_'))) {
+        return t;
+    }
+
+    // 3️⃣ 最後才提示用戶手動輸入
+    t = prompt('🔑 請輸入你的 GitHub Personal Access Token：\n\n💡 提示：輸入後系統會自動生成「一鍵連結」，\n   下次在新設備只需打開這個連結即可自動同步。\n\n去這裡生成: github.com/settings/tokens', '');
+    if (t && (t.startsWith('ghp_') || t.startsWith('github_pat_'))) {
+        localStorage.setItem('cw_gh_token', t);
+        // 生成並複製「一鍵連結」到剪貼簿
+        var magicLink = location.protocol + '//' + location.host + location.pathname + '#t=' + encodeURIComponent(t);
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(magicLink).then(function() {
+                toast('🔗 「一鍵連結」已複製！請收藏此連結，新設備直接打開即可自動同步', 'success', 5000);
+            }).catch(function(){});
+        } else {
+            alert('🔗 一鍵連結：\n\n' + magicLink + '\n\n請複製並收藏此連結');
+        }
+        return t;
+    } else {
+        console.warn('[☁️] 未提供有效的 GitHub Token，雲端同步不可用');
+        return null;
+    }
 }
 
 const cloudSync = {
