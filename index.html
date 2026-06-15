@@ -1524,16 +1524,11 @@ const cloudSync = {
     syncing: false,
     syncQueue: new Set(),
     syncTimer: null,
-    _uid: '',
+    _uid: 'cw_quotation_main',  // 固定 ID，所有瀏覽器共用同一份雲端數據
     _iid: 'supabase',
 
     init() {
-        let uid = localStorage.getItem('cw_sb_uid');
-        if (!uid) {
-            uid = 'cw_sb_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-            localStorage.setItem('cw_sb_uid', uid);
-        }
-        this._uid = uid;
+        // 使用固定 _uid，不再生成隨機 ID
         const sb = getSupabase();
         this.ready = !!sb;
         return this.ready;
@@ -3385,22 +3380,38 @@ document.addEventListener('DOMContentLoaded', () => {
     renderPreview();
     initAllTableColResize();
 
-    // Step 5: Auto cloud backup on first use (BACKGROUND, non-blocking)
-    if (!cloudSync.ready) {
-        // New device/browser: auto-push local data to cloud
-        setTimeout(() => {
-            cloudSync.pushAll().then(() => {
-                console.log('[Auto-Cloud] 首次使用自動建立雲端備份成功');
+    // Step 5: 每次打開網站自動從雲端拉取最新數據（核心同步邏輯）
+    // 先清除舊的隨機 uid，確保使用固定的 _uid
+    localStorage.removeItem('cw_sb_uid');
+    localStorage.removeItem('cw_js_uid');
+
+    setTimeout(() => {
+        cloudSync.pullAll().then((result) => {
+            if (result) {
+                console.log('[Auto-Sync] ✅ 已從雲端同步最新數據');
                 updateCloudStatusBadge();
-                toast('🟢 已自動建立雲端備份，數據將自動同步', 'success', 3000);
-            }).catch(() => {});
-        }, 2000);
-    } else {
-        // Existing device: pull latest data from cloud in background
-        setTimeout(() => {
-            cloudSync.pullAll().catch(() => {});
-        }, 1000);
-    }
+                // 重新渲染（如果雲端有新版數據）
+                const store = getStore();
+                if (store.products.length > 0) {
+                    renderProductTable();
+                }
+                toast('☁️ 已自動同步雲端數據', 'success', 2000);
+            } else {
+                // 雲端沒有數據，推送本地數據上去
+                return cloudSync.pushAll();
+            }
+        }).catch((e) => {
+            console.warn('[Auto-Sync] 雲端同步失敗，使用本地數據:', e.message || e);
+            updateCloudStatusBadge();
+        }).finally(() => {
+            // 啟動自動定時推送（每 30 秒自動保存一次到雲端）
+            setInterval(() => {
+                if (cloudSync.ready) {
+                    cloudSync.pushAll().catch(() => {});
+                }
+            }, 30000);
+        });
+    }, 1500);  // 延遲 1.5 秒等 Supabase 載入
 
     updateCloudStatusBadge();
     } catch(e) {
