@@ -1506,63 +1506,79 @@ function getLatestCost(code, name) {
 }
 
 // ==================== CLOUD SYNC (Supabase — 真正的雲端數據庫) ====================
-// ==================== CLOUD SYNC (Supabase REST API — 零依賴，純 fetch) ====================
-const SUPABASE_URL = 'https://xidxgflkngdayceejwdj.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_Rhp5UWYMCboUocsKwCofcQ_TU-Yt9pV';
+// ==================== CLOUD SYNC (GitHub Gist API — 零依賴，純 fetch) ====================
+// 使用 GitHub Gist 作為雲端存儲，解決 Supabase DNS 無法解析的問題
+const GH_TOKEN = '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';
+const GH_GIST_DESC = 'cw-quotation-cloud-data';
+const GH_API = 'https://api.github.com';
 
 const cloudSync = {
     ready: true,
     syncing: false,
     syncQueue: new Set(),
     syncTimer: null,
-    _uid: 'cw_quotation_main',  // 固定 ID，所有瀏覽器共用同一份雲端數據
+    _gistId: null,
 
     _headers() {
-        return {
-            'Content-Type': 'application/json',
-            'apikey': SUPABASE_KEY,
-            'Authorization': 'Bearer ' + SUPABASE_KEY,
-            'Prefer': 'return=representation'
-        };
+        return { 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json', 'Authorization': 'token ' + GH_TOKEN };
     },
 
-    init() { this.ready = true; return true; },
+    init() { this._gistId = localStorage.getItem('cw_gist_id'); this.ready = true; return true; },
 
     _collectAll() {
         const data = {};
-        const keys = ['products', 'quotations', 'refQuotations', 'settings', 'colWidths', 'costRecords', 'latestCosts', 'avgCosts'];
-        for (const k of keys) {
+        ['products','quotations','refQuotations','settings','colWidths','costRecords','latestCosts','avgCosts'].forEach(k => {
             const raw = localStorage.getItem('cw_' + k);
-            if (raw !== null) {
-                try { data[k] = JSON.parse(raw); } catch(e) { data[k] = raw; }
-            }
-        }
+            if (raw !== null) { try { data[k] = JSON.parse(raw); } catch(e) { data[k] = raw; } }
+        });
         data._updated = new Date().toISOString();
         return data;
     },
 
     _mergeFromCloud(data) {
-        const keys = ['products', 'quotations', 'refQuotations', 'settings', 'colWidths', 'costRecords', 'latestCosts', 'avgCosts'];
-        for (const k of keys) {
-            if (k in data && data[k] !== undefined) {
-                localStorage.setItem('cw_' + k, JSON.stringify(data[k]));
+        ['products','quotations','refQuotations','settings','colWidths','costRecords','latestCosts','avgCosts'].forEach(k => {
+            if (k in data && data[k] !== undefined) localStorage.setItem('cw_' + k, JSON.stringify(data[k]));
+        });
+    },
+
+    async _getOrCreateGist() {
+        if (this._gistId) return this._gistId;
+        try {
+            const sr = await fetch(GH_API + '/gists?per_page=100', { headers: this._headers(), signal: AbortSignal.timeout(10000) });
+            if (sr.ok) {
+                const gists = await sr.json();
+                const f = gists.find(g => g.description === GH_GIST_DESC);
+                if (f) { this._gistId = f.id; localStorage.setItem('cw_gist_id', f.id); return f.id; }
             }
-        }
+            const cr = await fetch(GH_API + '/gists', {
+                method: 'POST',
+                headers: this._headers(),
+                body: JSON.stringify({ description: GH_GIST_DESC, public: false, files: { 'data.json': { content: '{}' } } }),
+                signal: AbortSignal.timeout(15000)
+            });
+            if (!cr.ok) throw new Error('Gist create: ' + cr.status);
+            const gist = await cr.json();
+            this._gistId = gist.id; localStorage.setItem('cw_gist_id', gist.id);
+            return gist.id;
+        } catch(e) { console.warn('[☁️] Gist操作失敗:', e.message || e); return null; }
     },
 
     async pullAll() {
         this.ready = true;
         try {
-            const resp = await fetch(
-                SUPABASE_URL + '/rest/v1/store_data?device_id=eq.' + this._uid + '&select=data',
-                { headers: this._headers(), signal: AbortSignal.timeout(10000) }
-            );
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            const rows = await resp.json();
-            if (rows && rows.length > 0 && rows[0].data) {
-                this._mergeFromCloud(rows[0].data);
-                console.log('[☁️] 雲端數據已同步 ✓');
-                return true;
+            const gid = await this._getOrCreateGist();
+            if (!gid) throw new Error('無Gist');
+            const r = await fetch(GH_API + '/gists/' + gid, { headers: this._headers(), signal: AbortSignal.timeout(15000) });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const gist = await r.json();
+            const c = gist.files['data.json']?.content;
+            if (c) {
+                const d = JSON.parse(c);
+                if (d && typeof d === 'object' && Object.keys(d).length > 0) {
+                    this._mergeFromCloud(d);
+                    console.log('[☁️] 雲端數據已同步 ✓ (GitHub)');
+                    return true;
+                }
             }
             return this.pushAll();
         } catch(e) { console.warn('[☁️] 拉取失敗:', e.message || e); return false; }
@@ -1571,54 +1587,27 @@ const cloudSync = {
     async pushAll() {
         this.ready = true;
         try {
+            const gid = await this._getOrCreateGist();
+            if (!gid) throw new Error('無Gist');
             const payload = this._collectAll();
-            const resp = await fetch(
-                SUPABASE_URL + '/rest/v1/store_data',
-                {
-                    method: 'POST',
-                    headers: this._headers(),
-                    body: JSON.stringify({ device_id: this._uid, data: payload }),
-                    signal: AbortSignal.timeout(15000)
-                }
-            );
-            // 409 conflict → 改用 PATCH 更新
-            if (resp.status === 409 || resp.status === 409) {
-                const patchResp = await fetch(
-                    SUPABASE_URL + '/rest/v1/store_data?device_id=eq.' + this._uid,
-                    {
-                        method: 'PATCH',
-                        headers: this._headers(),
-                        body: JSON.stringify({ data: payload, updated_at: new Date().toISOString() }),
-                        signal: AbortSignal.timeout(15000)
-                    }
-                );
-                if (patchResp.ok) { console.log('[☁️] 數據已推送至雲端 ✓'); return; }
-            }
-            if (resp.ok) { console.log('[☁️] 數據已推送至雲端 ✓'); return; }
-            console.warn('[☁️] 推送失敗:', resp.status);
+            const r = await fetch(GH_API + '/gists/' + gid, {
+                method: 'PATCH',
+                headers: this._headers(),
+                body: JSON.stringify({ files: { 'data.json': { content: JSON.stringify(payload) } } }),
+                signal: AbortSignal.timeout(20000)
+            });
+            if (r.ok) console.log('[☁️] 數據已推送至雲端 ✓ (GitHub)');
+            else console.warn('[☁️] 推送失敗:', r.status);
         } catch(e) { console.warn('[☁️] 推送失敗:', e.message || e); }
     },
 
-    schedulePush(key) {
-        this.syncQueue.add(key);
-        if (this.syncTimer) clearTimeout(this.syncTimer);
-        this.syncTimer = setTimeout(() => this.flushQueue(), 1000);
-    },
-
-    async flushQueue() {
-        this.syncQueue.clear();
-        await this.pushAll();
-    },
-
-    reset() { this.init(); },
-
+    schedulePush(key) { this.syncQueue.add(key); if (this.syncTimer) clearTimeout(this.syncTimer); this.syncTimer = setTimeout(() => this.flushQueue(), 1000); },
+    async flushQueue() { this.syncQueue.clear(); await this.pushAll(); },
+    reset() { this._gistId = null; localStorage.removeItem('cw_gist_id'); this.init(); },
     async testConnection() {
         try {
-            const resp = await fetch(
-                SUPABASE_URL + '/rest/v1/store_data?device_id=eq.' + this._uid + '&select=device_id&limit=1',
-                { headers: this._headers(), signal: AbortSignal.timeout(8000) }
-            );
-            return { ok: resp.ok, msg: resp.ok ? '已連接' : 'HTTP ' + resp.status };
+            const r = await fetch(GH_API + '/user', { headers: this._headers(), signal: AbortSignal.timeout(8000) });
+            return { ok: r.ok, msg: r.ok ? 'GitHub已連接' : 'HTTP' + r.status };
         } catch(e) { return { ok: false, msg: e.message }; }
     }
 };
