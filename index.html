@@ -3210,7 +3210,7 @@ function _doExportQuotation(q) {
         var store = getStore();
         [q.refCustomers.a, q.refCustomers.b, q.refCustomers.c].forEach(function(refId, idx) {
             if (!refId) return;
-            var refQ = store.quotations.find(function(x) { return x.id === refId; });
+            var refQ = store.refQuotations.find(function(x) { return x.customer === refId; });
             if (refQ && refQ.items) {
                 refQ.items.forEach(function(it) {
                     var key = it.productId || it.code || '';
@@ -3294,7 +3294,7 @@ function _doExportAll(quotations) {
             var _store = getStore();
             [q.refCustomers.a, q.refCustomers.b, q.refCustomers.c].forEach(function(refId, _ri) {
                 if (!refId) return;
-                var _rq = _store.quotations.find(function(x) { return x.id === refId; });
+                var _rq = _store.refQuotations.find(function(x) { return x.customer === refId; });
                 if (_rq && _rq.items) {
                     _rq.items.forEach(function(it) {
                         var _k = it.productId || it.code || '';
