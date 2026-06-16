@@ -1462,24 +1462,49 @@ function _getLatestCostFrom(storeKey, code, name) {
 
 // ==================== LAZY SCRIPT LOADERS (avoids blocking page load) ====================
 // XLSX is ~944KB — only loaded when user actually needs import/export
+// CDN fallback chain: local → jsDelivr → unpkg → cdnjs
 let _xlsxReady = false, _xlsxLoading = false, _xlsxWaiters = [];
 function ensureXLSX() {
     if (typeof XLSX !== 'undefined') { _xlsxReady = true; return Promise.resolve(); }
     if (_xlsxReady) return Promise.resolve();
     if (_xlsxLoading) return new Promise(r => _xlsxWaiters.push(r));
     _xlsxLoading = true;
-    return new Promise((resolve, reject) => {
+
+    const CDN_URLS = [
+        'xlsx.full.min.js',                      // 1️⃣ 本地檔（部署版）
+        'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',  // 2️⃣ jsDelivr
+        'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',            // 3️⃣ unpkg
+        'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js' // 4️⃣ cdnjs
+    ];
+
+    function tryLoad(index) {
+        if (index >= CDN_URLS.length) {
+            _xlsxLoading = false;
+            reject(new Error('XLSX 載入失敗，請檢查網絡連線'));
+            return;
+        }
         const s = document.createElement('script');
-        s.src = 'xlsx.full.min.js';
+        s.src = CDN_URLS[index];
+        s.crossOrigin = 'anonymous';
         s.onload = () => {
-            _xlsxReady = true; _xlsxLoading = false;
-            _xlsxWaiters.forEach(fn => fn());
-            _xlsxWaiters = [];
-            resolve();
+            if (typeof XLSX !== 'undefined') {
+                _xlsxReady = true; _xlsxLoading = false;
+                _xlsxWaiters.forEach(fn => fn());
+                _xlsxWaiters = [];
+                console.log('[XLSX] ✅ 已載入：' + CDN_URLS[index]);
+                resolve();
+            } else {
+                tryLoad(index + 1);
+            }
         };
-        s.onerror = () => { _xlsxLoading = false; reject(new Error('XLSX load failed')); };
+        s.onerror = () => {
+            console.warn('[XLSX] ❌ 載入失敗：' + CDN_URLS[index]);
+            tryLoad(index + 1);
+        };
         document.head.appendChild(s);
-    });
+    }
+
+    tryLoad(0);
 }
 
 // Embedded data scripts (~160KB total) — only loaded on first visit when localStorage is empty
@@ -2114,8 +2139,21 @@ function addPreviewRow() {
 }
 
 function removePreviewRow(idx) {
+    if (manualItems.length <= 1) { toast('至少保留一行', 'error'); return; }
     manualItems.splice(idx, 1);
     renderPreview();
+}
+
+function insertPreviewRow(idx) {
+    // 在 idx 行下方插入新行（即在 idx+1 位置插入）
+    const blank = { code: '', name: '', cost: 0, costAvg: 0, qty: '', newPrice: 0, unit: '', productId: '', remark: '' };
+    manualItems.splice(idx + 1, 0, blank);
+    renderPreview();
+    // 聚焦到新插入行的商品編號欄
+    setTimeout(() => {
+        const inp = document.querySelector(`#previewBody input[data-row="${idx+1}"][data-field="code"]`);
+        if (inp) inp.focus();
+    }, 80);
 }
 
 function renderPreview() {
@@ -2148,7 +2186,7 @@ function renderPreview() {
     const refAOpts = getRefCustomerOptions(refCustomerA);
     const refBOpts = getRefCustomerOptions(refCustomerB);
     const refCOpts = getRefCustomerOptions(refCustomerC);
-    let h = '<tr><th>#</th><th>貨品編號</th><th>貨品名稱</th><th>單位</th><th>最新來貨價</th><th style="white-space:normal">年平均來貨價</th>';
+    let h = '<tr><th style="min-width:60px;white-space:nowrap">操作</th><th>#</th><th>貨品編號</th><th>貨品名稱</th><th>單位</th><th>最新來貨價</th><th style="white-space:normal">年平均來貨價</th>';
     // 用量 header — click to toggle dimension
     const qtyLabels = { 'week': '用量/星期', 'month': '用量/月', 'year': '用量/年' };
     const qtyTitle = currentQtyDim ? qtyLabels[currentQtyDim] : '用量';
@@ -2165,7 +2203,7 @@ function renderPreview() {
     h += `<th>參考A<br><select class="th-ref-sel" onchange="onHeaderRefChange('A',this)">${refAOpts}</select></th>`;
     h += `<th>參考B<br><select class="th-ref-sel" onchange="onHeaderRefChange('B',this)">${refBOpts}</select></th>`;
     h += `<th>參考C<br><select class="th-ref-sel" onchange="onHeaderRefChange('C',this)">${refCOpts}</select></th>`;
-    h += `<th>新報價</th><th>毛利率</th><th>備註</th><th style="min-width:90px">營業額</th><th style="min-width:100px">單件毛利</th><th></th></tr>`;
+    h += `<th>新報價</th><th>毛利率</th><th>備註</th><th style="min-width:90px">營業額</th><th style="min-width:100px">單件毛利</th></tr>`;
     previewHead.innerHTML = h;
 
     // Body
@@ -2213,6 +2251,10 @@ function renderPreview() {
             : `<td class="td-inp" style="min-width:70px"><input type="number" value="${qty > 0 ? qty : ''}" step="1" min="0" style="text-align:right;padding:2px 4px;width:60px;" data-row="${i}" data-field="qty" onchange="updateInlineQty(${i},this.value)" onkeydown="onCostKey(${i},event)"></td>`;
 
         b += `<tr class="${cls}">
+            <td class="td-act" style="min-width:60px;white-space:nowrap">
+                <button onclick="insertPreviewRow(${i})" title="在此行下方插入新行" style="background:none;border:none;cursor:pointer;color:#2E7D32;font-size:14px;padding:2px 4px" onmouseover="this.style.background='#E8F5E9'" onmouseout="this.style.background='none'">＋</button>
+                <button onclick="removePreviewRow(${i})" title="刪除此行" style="background:none;border:none;cursor:pointer;color:#C62828;font-size:14px;padding:2px 4px" onmouseover="this.style.background='#FFEBEE'" onmouseout="this.style.background='none'">✕</button>
+            </td>
             <td>${i+1}</td>
             <td class="td-inp"><input type="text" value="${codeVal}" autocomplete="off" data-row="${i}" data-field="code"
                 oninput="onInlineInput(${i},'code',this)" onfocus="onInlineInput(${i},'code',this)"
