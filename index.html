@@ -1073,6 +1073,7 @@
 
             <!-- Save -->
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:10px">
+                <button class="btn btn-outline" onclick="exportCurrentPreview()" id="btnExportQ" disabled>📥 匯出Excel</button>
                 <button class="btn btn-outline" onclick="window.print()" id="btnPrintQ" disabled>🖨️ 列印</button>
                 <button class="btn btn-primary btn-lg" onclick="saveQuotation()" id="btnSaveQ" disabled>💾 儲存報價</button>
             </div>
@@ -2163,6 +2164,7 @@ function renderPreview() {
     const previewEmpty = document.getElementById('previewEmpty');
     const saveBtn = document.getElementById('btnSaveQ');
     const printBtn = document.getElementById('btnPrintQ');
+    const exportBtn = document.getElementById('btnExportQ');
 
     if (manualItems.length === 0) {
         previewHead.innerHTML = '';
@@ -2170,11 +2172,13 @@ function renderPreview() {
         previewEmpty.style.display = 'block';
         saveBtn.disabled = true;
         printBtn.disabled = true;
+        exportBtn.disabled = true;
         return;
     }
     previewEmpty.style.display = 'none';
     saveBtn.disabled = false;
     printBtn.disabled = false;
+    exportBtn.disabled = false;
     if (saveBtn) saveBtn.textContent = window._editingQuotationId ? '💾 更新報價' : '💾 儲存報價';
 
     let sumCostForAvg = 0, cntCost = 0;
@@ -3117,6 +3121,63 @@ function deleteQuotation(id) {
     updateBadges();
     if (currentPage === 'history') renderHistoryList();
     toast('報價已移至垃圾桶（可復原）');
+}
+
+
+function exportCurrentPreview() {
+    // 如果有編輯中的報價ID，直接匯出該報價
+    if (window._editingQuotationId) {
+        exportQuotation(window._editingQuotationId);
+        return;
+    }
+    
+    // 否則，從當前預覽數據構建報價對象並匯出
+    const customer = document.getElementById('qCustomer').value || '未保存報價';
+    const date = document.getElementById('qDate').value || new Date().toISOString().slice(0,10);
+    const remark = document.getElementById('qRemark').value || '';
+    
+    // 過濾空行
+    const items = manualItems.filter(it => it.code || it.name);
+    if (items.length === 0) {
+        toast('沒有可匯出的項目', 'error');
+        return;
+    }
+    
+    // 構建報價對象
+    const q = {
+        id: '',
+        code: '未保存',
+        customer: customer,
+        date: date,
+        remark: remark,
+        margins: { min: currentMinM, target: currentTgtM, max: currentMaxM },
+        items: items.map(it => {
+            const cost = it.cost || 0;
+            const minPrice = cost / (1 - currentMinM/100);
+            const targetPrice = cost / (1 - currentTgtM/100);
+            const maxPrice = cost / (1 - currentMaxM/100);
+            return {
+                code: it.code,
+                name: it.name,
+                cost: cost,
+                costAvg: it.costAvg || cost,
+                qty: it.qty,
+                newPrice: it.newPrice || 0,
+                unit: it.unit,
+                prices: { min: minPrice, target: targetPrice, max: maxPrice }
+            };
+        }),
+        totalTarget: 0
+    };
+    
+    // 計算 totalTarget
+    q.totalTarget = q.items.reduce((sum, it) => {
+        const qty = parseFloat(it.qty) || 0;
+        return sum + (it.prices.target * qty);
+    }, 0);
+    
+    // 匯出Excel
+    ensureXLSX().then(() => _doExportQuotation(q)).catch(() => toast('Excel 引擎載入失敗，請檢查網絡', 'error'));
 }
 
 function exportQuotation(id) {
