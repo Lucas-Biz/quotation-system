@@ -1472,41 +1472,43 @@ function ensureXLSX() {
     if (_xlsxLoading) return new Promise(r => _xlsxWaiters.push(r));
     _xlsxLoading = true;
 
-    const CDN_URLS = [
-        'xlsx.full.min.js',                      // 1️⃣ 本地檔（部署版）
-        'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',  // 2️⃣ jsDelivr
-        'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',            // 3️⃣ unpkg
-        'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js' // 4️⃣ cdnjs
-    ];
+    return new Promise(function(resolve, reject) {
+        const CDN_URLS = [
+            'xlsx.full.min.js',                      // 1️⃣ 本地檔（部署版）
+            'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',  // 2️⃣ jsDelivr
+            'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',            // 3️⃣ unpkg
+            'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js' // 4️⃣ cdnjs
+        ];
 
-    function tryLoad(index) {
-        if (index >= CDN_URLS.length) {
-            _xlsxLoading = false;
-            reject(new Error('XLSX 載入失敗，請檢查網絡連線'));
-            return;
-        }
-        const s = document.createElement('script');
-        s.src = CDN_URLS[index];
-        s.crossOrigin = 'anonymous';
-        s.onload = () => {
-            if (typeof XLSX !== 'undefined') {
-                _xlsxReady = true; _xlsxLoading = false;
-                _xlsxWaiters.forEach(fn => fn());
-                _xlsxWaiters = [];
-                console.log('[XLSX] ✅ 已載入：' + CDN_URLS[index]);
-                resolve();
-            } else {
-                tryLoad(index + 1);
+        function tryLoad(index) {
+            if (index >= CDN_URLS.length) {
+                _xlsxLoading = false;
+                reject(new Error('XLSX 載入失敗，請檢查網絡連線'));
+                return;
             }
-        };
-        s.onerror = () => {
-            console.warn('[XLSX] ❌ 載入失敗：' + CDN_URLS[index]);
-            tryLoad(index + 1);
-        };
-        document.head.appendChild(s);
-    }
+            var s = document.createElement('script');
+            s.src = CDN_URLS[index];
+            s.crossOrigin = 'anonymous';
+            s.onload = function() {
+                if (typeof XLSX !== 'undefined') {
+                    _xlsxReady = true; _xlsxLoading = false;
+                    _xlsxWaiters.forEach(function(fn) { fn(); });
+                    _xlsxWaiters = [];
+                    console.log('[XLSX] 已載入：' + CDN_URLS[index]);
+                    resolve();
+                } else {
+                    tryLoad(index + 1);
+                }
+            };
+            s.onerror = function() {
+                console.warn('[XLSX] 載入失敗：' + CDN_URLS[index]);
+                tryLoad(index + 1);
+            };
+            document.head.appendChild(s);
+        }
 
-    tryLoad(0);
+        tryLoad(0);
+    });
 }
 
 // Embedded data scripts (~160KB total) — only loaded on first visit when localStorage is empty
