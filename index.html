@@ -2161,6 +2161,14 @@ function insertPreviewRow(idx) {
 }
 
 function renderPreview() {
+    if (window._rvTimer) clearTimeout(window._rvTimer);
+    window._rvTimer = setTimeout(function() {
+        window._rvTimer = null;
+        _renderPreviewImpl();
+    }, 8);
+}
+
+function _renderPreviewImpl() {
     const previewHead = document.getElementById('previewHead');
     const previewBody = document.getElementById('previewBody');
     const previewEmpty = document.getElementById('previewEmpty');
@@ -3213,12 +3221,24 @@ function _doExportQuotation(q) {
             var refQ = store.refQuotations.find(function(x) { return x.customer === refId; });
             if (refQ && refQ.items) {
                 refQ.items.forEach(function(it) {
-                    var key = it.productId || it.code || '';
-                    if (!key) return;
-                    var entry = { price: it.newPrice };
-                    if (idx === 0) expRefA[key] = entry;
-                    else if (idx === 1) expRefB[key] = entry;
-                    else expRefC[key] = entry;
+                    var key = (it.productId || it.code || '').trim();
+                    var refPrice = it.price || it.newPrice || 0;
+                    if (!key && refPrice > 0) return;
+                    var entry = { price: refPrice };
+                    // 按 code 匹配
+                    if (key) {
+                        if (idx === 0) expRefA[key] = entry;
+                        else if (idx === 1) expRefB[key] = entry;
+                        else expRefC[key] = entry;
+                    }
+                    // 按 name fallback 匹配
+                    var nameKey = (it.name || '').trim().toLowerCase();
+                    if (nameKey) {
+                        var nKey = '_name_' + nameKey;
+                        if (idx === 0) expRefA[nKey] = entry;
+                        else if (idx === 1) expRefB[nKey] = entry;
+                        else expRefC[nKey] = entry;
+                    }
                 });
             }
         });
@@ -3228,9 +3248,14 @@ function _doExportQuotation(q) {
         expRefC = refPricesC;
     }
 
-    function _lookupRef(code, map) {
+    function _lookupRef(code, name, map) {
         if (!map) return null;
         if (code && map[code]) return map[code];
+        // fallback by name
+        if (name) {
+            var nk = '_name_' + String(name).trim().toLowerCase();
+            if (map[nk]) return map[nk];
+        }
         return null;
     }
 
@@ -3241,9 +3266,9 @@ function _doExportQuotation(q) {
     var data = q.items.map(function(it, i) {
         var qty = parseFloat(it.qty) || 0;
         var gm = (it.newPrice > 0 && it.cost > 0) ? ((it.newPrice - it.cost) / it.newPrice * 100) : null;
-        var refA = _lookupRef(it.code, expRefA);
-        var refB = _lookupRef(it.code, expRefB);
-        var refC = _lookupRef(it.code, expRefC);
+        var refA = _lookupRef(it.code, it.name, expRefA);
+        var refB = _lookupRef(it.code, it.name, expRefB);
+        var refC = _lookupRef(it.code, it.name, expRefC);
         var revenue = (it.newPrice > 0 && qty > 0) ? it.newPrice * qty : 0;
         var profitPerUnit = (it.newPrice > 0 && it.cost > 0) ? it.newPrice - it.cost : 0;
         totalRevenue += revenue;
@@ -3297,9 +3322,24 @@ function _doExportAll(quotations) {
                 var _rq = _store.refQuotations.find(function(x) { return x.customer === refId; });
                 if (_rq && _rq.items) {
                     _rq.items.forEach(function(it) {
-                        var _k = it.productId || it.code || '';
-                        if (!_k) return;
-                        var _e = { price: it.newPrice };
+                        var _k = (it.productId || it.code || '').trim();
+                        var _rp = it.price || it.newPrice || 0;
+                        if (!_k && _rp > 0) return;
+                        var _e = { price: _rp };
+                        // 按 code
+                        if (_k) {
+                            if (_ri === 0) _expA[_k] = _e;
+                            else if (_ri === 1) _expB[_k] = _e;
+                            else _expC[_k] = _e;
+                        }
+                        // 按 name fallback
+                        var _nk = (it.name || '').trim().toLowerCase();
+                        if (_nk) {
+                            var _nnk = '_name_' + _nk;
+                            if (_ri === 0) _expA[_nnk] = _e;
+                            else if (_ri === 1) _expB[_nnk] = _e;
+                            else _expC[_nnk] = _e;
+                        }
                         if (_ri === 0) _expA[_k] = _e;
                         else if (_ri === 1) _expB[_k] = _e;
                         else _expC[_k] = _e;
@@ -3311,9 +3351,13 @@ function _doExportAll(quotations) {
             _expB = refPricesB;
             _expC = refPricesC;
         }
-        function _lk(code, map) {
+        function _lk(code, name, map) {
             if (!map) return null;
             if (code && map[code]) return map[code];
+            if (name) {
+                var _nk2 = '_name_' + String(name).trim().toLowerCase();
+                if (map[_nk2]) return map[_nk2];
+            }
             return null;
         }
         var _hdrs = ['#', '商品编号', '商品名称', '单位', '最新来价', '年平均来价', '用量',
@@ -3323,9 +3367,9 @@ function _doExportAll(quotations) {
         var _data = q.items.map(function(it, i) {
             var _qty = parseFloat(it.qty) || 0;
             var _gm = (it.newPrice > 0 && it.cost > 0) ? ((it.newPrice - it.cost) / it.newPrice * 100) : null;
-            var _rA = _lk(it.code, _expA);
-            var _rB = _lk(it.code, _expB);
-            var _rC = _lk(it.code, _expC);
+            var _rA = _lk(it.code, it.name, _expA);
+            var _rB = _lk(it.code, it.name, _expB);
+            var _rC = _lk(it.code, it.name, _expC);
             var _rev = (it.newPrice > 0 && _qty > 0) ? it.newPrice * _qty : 0;
             var _ppu = (it.newPrice > 0 && it.cost > 0) ? it.newPrice - it.cost : 0;
             _totalRev += _rev;
