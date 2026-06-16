@@ -1474,7 +1474,7 @@ function ensureXLSX() {
 
     return new Promise(function(resolve, reject) {
         const CDN_URLS = [
-            'xlsx.full.min.js',                      // 1️⃣ 本地檔（部署版）
+            '/xlsx.full.min.js',                  // 1️⃣ 本地檔（Netlify 本域，最可靠）
             'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',  // 2️⃣ jsDelivr
             'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',            // 3️⃣ unpkg
             'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js' // 4️⃣ cdnjs
