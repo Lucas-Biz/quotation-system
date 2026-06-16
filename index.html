@@ -3153,6 +3153,7 @@ function exportCurrentPreview() {
         date: date,
         remark: remark,
         margins: { min: currentMinM, target: currentTgtM, max: currentMaxM },
+        refCustomers: { a: refCustomerA, b: refCustomerB, c: refCustomerC },
         items: items.map(it => {
             const cost = it.cost || 0;
             const minPrice = cost / (1 - currentMinM/100);
@@ -3190,19 +3191,79 @@ function exportQuotation(id) {
 }
 
 function _doExportQuotation(q) {
-    const hdrs = ['#', '貨品編號', '貨品名稱', '單位', '最新來貨價', '年平均來貨價', '用量', `最低售價(${q.margins.min}%)`, `目標售價(${q.margins.target}%)`, `最高售價(${q.margins.max}%)`, '新報價', '毛利率'];
-    const data = q.items.map((it, i) => {
-        const qtyStr = it.qty || '';
-        const gm = (it.newPrice > 0 && it.cost > 0) ? ((it.newPrice - it.cost) / it.newPrice * 100) : null;
-        return [i+1, it.code || '', it.name, it.unit || '', it.cost, it.costAvg || it.cost, qtyStr,
-            it.prices.min.toFixed(2), it.prices.target.toFixed(2), it.prices.max.toFixed(2),
-            it.newPrice > 0 ? it.newPrice : '', gm !== null ? gm.toFixed(1)+'%' : ''];
+    // 確保每個 item 都有 prices
+    if (q.margins) {
+        q.items.forEach(function(it) {
+            if (!it.prices && it.costAvg) {
+                it.prices = {
+                    min: it.costAvg / (1 - q.margins.min/100),
+                    target: it.costAvg / (1 - q.margins.target/100),
+                    max: it.costAvg / (1 - q.margins.max/100)
+                };
+            }
+        });
+    }
+
+    // 構建參考報價價格映射
+    var expRefA = {}, expRefB = {}, expRefC = {};
+    if (q.refCustomers) {
+        var store = getStore();
+        [q.refCustomers.a, q.refCustomers.b, q.refCustomers.c].forEach(function(refId, idx) {
+            if (!refId) return;
+            var refQ = store.quotations.find(function(x) { return x.id === refId; });
+            if (refQ && refQ.items) {
+                refQ.items.forEach(function(it) {
+                    var key = it.productId || it.code || '';
+                    if (!key) return;
+                    var entry = { price: it.newPrice };
+                    if (idx === 0) expRefA[key] = entry;
+                    else if (idx === 1) expRefB[key] = entry;
+                    else expRefC[key] = entry;
+                });
+            }
+        });
+    } else {
+        expRefA = refPricesA;
+        expRefB = refPricesB;
+        expRefC = refPricesC;
+    }
+
+    function _lookupRef(code, map) {
+        if (!map) return null;
+        if (code && map[code]) return map[code];
+        return null;
+    }
+
+    var hdrs = ['#', '貨品編號', '貨品名稱', '單位', '最新來貨價', '年平均來貨價', '用量',
+        '最低售價(' + q.margins.min + '%)', '目標售價(' + q.margins.target + '%)', '最高售價(' + q.margins.max + '%)',
+        '參考A', '參考B', '參考C', '新報價', '毛利率', '備註', '營業額', '單件毛利'];
+    var totalRevenue = 0;
+    var data = q.items.map(function(it, i) {
+        var qty = parseFloat(it.qty) || 0;
+        var gm = (it.newPrice > 0 && it.cost > 0) ? ((it.newPrice - it.cost) / it.newPrice * 100) : null;
+        var refA = _lookupRef(it.code, expRefA);
+        var refB = _lookupRef(it.code, expRefB);
+        var refC = _lookupRef(it.code, expRefC);
+        var revenue = (it.newPrice > 0 && qty > 0) ? it.newPrice * qty : 0;
+        var profitPerUnit = (it.newPrice > 0 && it.cost > 0) ? it.newPrice - it.cost : 0;
+        totalRevenue += revenue;
+        var p = it.prices || {};
+        return [i+1, it.code || '', it.name, it.unit || '', it.cost, it.costAvg || it.cost, it.qty || '',
+            p.min ? p.min.toFixed(2) : '', p.target ? p.target.toFixed(2) : '', p.max ? p.max.toFixed(2) : '',
+            refA ? refA.price.toFixed(2) : '-', refB ? refB.price.toFixed(2) : '-', refC ? refC.price.toFixed(2) : '-',
+            it.newPrice > 0 ? it.newPrice : '', gm !== null ? gm.toFixed(1) + '%' : '',
+            it.remark || '', revenue > 0 ? revenue.toFixed(2) : '', profitPerUnit > 0 ? profitPerUnit.toFixed(2) : ''];
     });
-    data.push(['', '', '總計（目標價）', '', '', '', q.totalTarget.toFixed(2)]);
-    const ws = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
-    const wb = XLSX.utils.book_new();
+    // 總計列
+    var totals = new Array(hdrs.length).fill('');
+    totals[0] = '總計';
+    var revIdx = hdrs.indexOf('營業額');
+    if (revIdx >= 0) totals[revIdx] = totalRevenue.toFixed(2);
+    data.push(totals);
+    var ws = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
+    var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '報價明細');
-    XLSX.writeFile(wb, `${q.code}_${q.customer}.xlsx`);
+    XLSX.writeFile(wb, (q.code || '報價') + '_' + (q.customer || '') + '.xlsx');
     toast('報價已匯出 Excel');
 }
 
@@ -3213,23 +3274,80 @@ function exportAllQuotations() {
 }
 
 function _doExportAll(quotations) {
-    const wb = XLSX.utils.book_new();
-    quotations.forEach((q, idx) => {
-        const hdrs = ['#', '商品編號', '商品名稱', '單位', '最新來價', '年平均來價', '用量', `最低售價(${q.margins.min}%)`, `目標售價(${q.margins.target}%)`, `最高售價(${q.margins.max}%)`, '新報價', '毛利率'];
-        const data = q.items.map((it, i) => {
-            const qtyStr = it.qty || '';
-            const gm = (it.newPrice > 0 && it.cost > 0) ? ((it.newPrice - it.cost) / it.newPrice * 100) : null;
-            return [i+1, it.code || '', it.name, it.unit || '', it.cost, it.costAvg || it.cost, qtyStr,
-                it.prices.min.toFixed(2), it.prices.target.toFixed(2), it.prices.max.toFixed(2),
-                it.newPrice > 0 ? it.newPrice : '', gm !== null ? gm.toFixed(1)+'%' : ''];
+    var wb = XLSX.utils.book_new();
+    quotations.forEach(function(q, idx) {
+        // 确保 prices
+        if (q.margins) {
+            q.items.forEach(function(it) {
+                if (!it.prices && it.costAvg) {
+                    it.prices = {
+                        min: it.costAvg / (1 - q.margins.min/100),
+                        target: it.costAvg / (1 - q.margins.target/100),
+                        max: it.costAvg / (1 - q.margins.max/100)
+                    };
+                }
+            });
+        }
+        // 参考价映射
+        var _expA = {}, _expB = {}, _expC = {};
+        if (q.refCustomers) {
+            var _store = getStore();
+            [q.refCustomers.a, q.refCustomers.b, q.refCustomers.c].forEach(function(refId, _ri) {
+                if (!refId) return;
+                var _rq = _store.quotations.find(function(x) { return x.id === refId; });
+                if (_rq && _rq.items) {
+                    _rq.items.forEach(function(it) {
+                        var _k = it.productId || it.code || '';
+                        if (!_k) return;
+                        var _e = { price: it.newPrice };
+                        if (_ri === 0) _expA[_k] = _e;
+                        else if (_ri === 1) _expB[_k] = _e;
+                        else _expC[_k] = _e;
+                    });
+                }
+            });
+        } else {
+            _expA = refPricesA;
+            _expB = refPricesB;
+            _expC = refPricesC;
+        }
+        function _lk(code, map) {
+            if (!map) return null;
+            if (code && map[code]) return map[code];
+            return null;
+        }
+        var _hdrs = ['#', '商品编号', '商品名称', '单位', '最新来价', '年平均来价', '用量',
+            '最低售价(' + q.margins.min + '%)', '目标售价(' + q.margins.target + '%)', '最高售价(' + q.margins.max + '%)',
+            '参考A', '参考B', '参考C', '新报价', '毛利率', '备注', '营业额', '单件毛利'];
+        var _totalRev = 0;
+        var _data = q.items.map(function(it, i) {
+            var _qty = parseFloat(it.qty) || 0;
+            var _gm = (it.newPrice > 0 && it.cost > 0) ? ((it.newPrice - it.cost) / it.newPrice * 100) : null;
+            var _rA = _lk(it.code, _expA);
+            var _rB = _lk(it.code, _expB);
+            var _rC = _lk(it.code, _expC);
+            var _rev = (it.newPrice > 0 && _qty > 0) ? it.newPrice * _qty : 0;
+            var _ppu = (it.newPrice > 0 && it.cost > 0) ? it.newPrice - it.cost : 0;
+            _totalRev += _rev;
+            var _p = it.prices || {};
+            return [i+1, it.code || '', it.name, it.unit || '', it.cost, it.costAvg || it.cost, it.qty || '',
+                _p.min ? _p.min.toFixed(2) : '', _p.target ? _p.target.toFixed(2) : '', _p.max ? _p.max.toFixed(2) : '',
+                _rA ? _rA.price.toFixed(2) : '-', _rB ? _rB.price.toFixed(2) : '-', _rC ? _rC.price.toFixed(2) : '-',
+                it.newPrice > 0 ? it.newPrice : '', _gm !== null ? _gm.toFixed(1) + '%' : '',
+                it.remark || '', _rev > 0 ? _rev.toFixed(2) : '', _ppu > 0 ? _ppu.toFixed(2) : ''];
         });
-        data.push(['', '', '總計（目標價）', '', '', '', '', '', '', '', '', q.totalTarget.toFixed(2)]);
-        const ws = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
-        let name = (q.code || q.customer || `報價${idx+1}`).replace(/[\\\/\*\?\[\]:]/g, '_').substring(0, 31);
-        XLSX.utils.book_append_sheet(wb, ws, name);
+        // 总计列
+        var _totals = new Array(_hdrs.length).fill('');
+        _totals[0] = '总计';
+        var _ri = _hdrs.indexOf('营业额');
+        if (_ri >= 0) _totals[_ri] = _totalRev.toFixed(2);
+        _data.push(_totals);
+        var _ws = XLSX.utils.aoa_to_sheet([_hdrs, _data]);
+        var _name = (q.code || q.customer || '报价' + (idx+1)).replace(/[\\\/\*\?\[\]\:]/g, '_').substring(0, 31);
+        XLSX.utils.book_append_sheet(wb, _ws, _name);
     });
-    XLSX.writeFile(wb, `全部報價_${new Date().toISOString().slice(0,10)}.xlsx`);
-    toast(`已匯出 ${quotations.length} 份報價`);
+    XLSX.writeFile(wb, '全部报价_' + new Date().toISOString().slice(0,10) + '.xlsx');
+    toast('已导出 ' + quotations.length + ' 份报价');
 }
 
 // ==================== SETTINGS ====================
