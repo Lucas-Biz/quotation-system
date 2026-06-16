@@ -1221,6 +1221,7 @@
                 <div class="card-header">
                     <h3>📋 報價記錄</h3>
                     <span style="font-size:12px;color:var(--gray-t)" id="historyListTitle">所有已儲存的報價單</span>
+                    <button class="btn btn-outline btn-sm" onclick="exportAllQuotations()" style="margin-left:auto;font-size:11px" id="btnExportAll">📥 匯出全部</button>
                 </div>
                 <div class="card-body">
                     <div class="q-list" id="historyList"></div>
@@ -2805,8 +2806,8 @@ function clearProducts() {
 
 function exportProducts() {
     const store = getStore();
-    if (store.products.length === 0) { toast('暫無貨品資料可匯出', 'error'); return; }
-    ensureXLSX().then(() => _doExportProducts());
+    if (store.products.length === 0) { toast('暫無商品資料可匯出', 'error'); return; }
+    ensureXLSX().then(() => _doExportProducts()).catch(() => toast('Excel 引擎載入失敗，請檢查網絡', 'error'));
 }
 function _doExportProducts() {
     const store = getStore();
@@ -3122,7 +3123,7 @@ function exportQuotation(id) {
     const store = getStore();
     const q = store.quotations.find(x => x.id === id);
     if (!q) return;
-    ensureXLSX().then(() => _doExportQuotation(q));
+    ensureXLSX().then(() => _doExportQuotation(q)).catch(() => toast('Excel 引擎載入失敗，請檢查網絡', 'error'));
 }
 
 function _doExportQuotation(q) {
@@ -3140,6 +3141,32 @@ function _doExportQuotation(q) {
     XLSX.utils.book_append_sheet(wb, ws, '報價明細');
     XLSX.writeFile(wb, `${q.code}_${q.customer}.xlsx`);
     toast('報價已匯出 Excel');
+}
+
+function exportAllQuotations() {
+    const store = getStore();
+    if (store.quotations.length === 0) { toast('暫無報價記錄可匯出', 'error'); return; }
+    ensureXLSX().then(() => _doExportAll(store.quotations)).catch(() => toast('Excel 引擎載入失敗，請檢查網絡', 'error'));
+}
+
+function _doExportAll(quotations) {
+    const wb = XLSX.utils.book_new();
+    quotations.forEach((q, idx) => {
+        const hdrs = ['#', '商品編號', '商品名稱', '單位', '最新來價', '年平均來價', '用量', `最低售價(${q.margins.min}%)`, `目標售價(${q.margins.target}%)`, `最高售價(${q.margins.max}%)`, '新報價', '毛利率'];
+        const data = q.items.map((it, i) => {
+            const qtyStr = it.qty || '';
+            const gm = (it.newPrice > 0 && it.cost > 0) ? ((it.newPrice - it.cost) / it.newPrice * 100) : null;
+            return [i+1, it.code || '', it.name, it.unit || '', it.cost, it.costAvg || it.cost, qtyStr,
+                it.prices.min.toFixed(2), it.prices.target.toFixed(2), it.prices.max.toFixed(2),
+                it.newPrice > 0 ? it.newPrice : '', gm !== null ? gm.toFixed(1)+'%' : ''];
+        });
+        data.push(['', '', '總計（目標價）', '', '', '', '', '', '', '', '', q.totalTarget.toFixed(2)]);
+        const ws = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
+        let name = (q.code || q.customer || `報價${idx+1}`).replace(/[\\\/\*\?\[\]:]/g, '_').substring(0, 31);
+        XLSX.utils.book_append_sheet(wb, ws, name);
+    });
+    XLSX.writeFile(wb, `全部報價_${new Date().toISOString().slice(0,10)}.xlsx`);
+    toast(`已匯出 ${quotations.length} 份報價`);
 }
 
 // ==================== SETTINGS ====================
