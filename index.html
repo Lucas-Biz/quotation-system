@@ -4257,7 +4257,7 @@ window.print = function() {
         if (typeof _checkServerSync !== 'function') return;
         const available = await _checkServerSync();
         if (available) {
-            // 使用 Netlify Function 自動同步（無需 Token）
+            // 使用伺服器端同步（無需 Token）
             console.log('[☁️] 自動同步模式：已啟用');
             if (typeof cloudSync !== 'undefined' && typeof cloudSync.pullAll === 'function') {
                 cloudSync.pullAll().then(r => {
@@ -4265,10 +4265,64 @@ window.print = function() {
                 }).catch(() => {});
             }
         } else {
-            // Netlify Function 不可用，使用 Token 模式（原有邏輯）
+            // 伺服器端同步不可用，使用 Token 模式（原有邏輯）
             console.log('[☁️] Token 模式：請手動同步');
         }
     }, 800);
+
+    // ==================== 定期自動同步（每 30 秒） ====================
+    // 確保資料在多設備間即時同步
+    let _autoSyncTimer = null;
+    let _lastSyncTimestamp = null;
+
+    async function _autoSync() {
+        // 如果正在同步，跳過
+        if (typeof cloudSync === 'undefined' || cloudSync.syncing) return;
+        
+        try {
+            const result = await cloudSync.pullAll();
+            if (!result) return;
+
+            // 檢查資料是否有更新（比較 _updated 時間戳）
+            const store = getStore ? getStore() : null;
+            const cloudUpdated = result.data && result.data._updated;
+            
+            if (cloudUpdated && cloudUpdated !== _lastSyncTimestamp) {
+                _lastSyncTimestamp = cloudUpdated;
+                
+                // 如果有更新，重新渲染頁面
+                if (typeof renderAll === 'function') {
+                    // 如果在建立報價頁面且有未保存的變更，不重新渲染（避免丟失工作）
+                    if (currentPage === 'create' && isCreateDirty && isCreateDirty()) {
+                        toast('☁️ 雲端有新版資料，請保存或重新整理頁面', 'info', 4000);
+                    } else {
+                        renderAll();
+                        toast('☁️ 已從雲端同步最新資料', 'success', 2000);
+                    }
+                }
+            }
+        } catch(e) {
+            // 靜默失敗，不干擾用戶
+            console.warn('[☁️] 自動同步失敗:', e.message || e);
+        }
+    }
+
+    // 啟動定期同步（30 秒一次）
+    setTimeout(() => {
+        if (typeof cloudSync !== 'undefined') {
+            _autoSyncTimer = setInterval(_autoSync, 30000); // 30 秒
+            console.log('[☁️] 定期同步已啟動（每 30 秒）');
+            // 立即執行一次
+            _autoSync();
+        }
+    }, 3000); // 頁面加載 3 秒後啟動
+
+    // 頁面可見性變化時，立即同步一次（用戶切換回頁面時）
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && typeof _autoSync === 'function') {
+            _autoSync();
+        }
+    });
 })();
 </script>
 </body>
