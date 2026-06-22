@@ -1608,6 +1608,55 @@ function _getGHToken() {
     }
 }
 
+
+// ==================== 同步方式自動檢測 ====================
+// 優先使用 Netlify Function（無 Token 模式），失敗時回退到 Token 模式
+var _netlifySyncAvailable = null; // null = 未檢測, true = 可用, false = 不可用
+
+async function _checkNetlifySync() {
+    if (_netlifySyncAvailable !== null) return _netlifySyncAvailable;
+    try {
+        const resp = await fetch('/.netlify/functions/cloud-sync?action=pull', {
+            method: 'GET',
+            signal: AbortSignal.timeout(3000)
+        });
+        if (resp.ok || resp.status === 404) {
+            // 404 也算是可用（Gist 不存在但 Function 正常工作）
+            _netlifySyncAvailable = true;
+            console.log('[☁️] 使用 Netlify Function 同步（無 Token 模式）');
+            return true;
+        }
+        _netlifySyncAvailable = false;
+        return false;
+    } catch(e) {
+        _netlifySyncAvailable = false;
+        console.log('[☁️] Netlify Function 不可用，使用 Token 模式');
+        return false;
+    }
+}
+
+// Netlify Function 同步實現
+const netlifySync = {
+    async pullAll() {
+        const resp = await fetch('/.netlify/functions/cloud-sync?action=pull', {
+            method: 'GET',
+            signal: AbortSignal.timeout(15000)
+        });
+        if (!resp.ok) throw new Error('Pull 失敗: ' + resp.status);
+        return await resp.json();
+    },
+    async pushAll(data, gistId) {
+        const resp = await fetch('/.netlify/functions/cloud-sync?action=push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data, gistId }),
+            signal: AbortSignal.timeout(15000)
+        });
+        if (!resp.ok) throw new Error('Push 失敗: ' + resp.status);
+        return await resp.json();
+    }
+};
+
 const cloudSync = {
     ready: true,
     syncing: false,
@@ -1616,6 +1665,8 @@ const cloudSync = {
     _gistId: null,
 
     _headers() {
+        // 如果使用 Netlify Function，不需要 Token
+        if (_netlifySyncAvailable === true) return {};
         const t = _getGHToken();
         if (!t) return {};
         return { 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json', 'Authorization': 'token ' + t };
@@ -1640,6 +1691,15 @@ const cloudSync = {
     },
 
     async _getOrCreateGist() {
+        // 如果使用 Netlify Function，直接返回已保存的 gistId（Function 會自動處理）
+        if (_netlifySyncAvailable === true) {
+            if (this._gistId) return this._gistId;
+            // 嘗試從 localStorage 讀取
+            const saved = localStorage.getItem('cw_gist_id');
+            if (saved) { this._gistId = saved; return saved; }
+            return null; // Netlify Function 會自動創建
+        }
+        // 原有 Token 模式邏輯
         if (this._gistId) return this._gistId;
         try {
             const sr = await fetch(GH_API + '/gists?per_page=100', { headers: this._headers(), signal: AbortSignal.timeout(10000) });
@@ -1663,6 +1723,23 @@ const cloudSync = {
 
     async pullAll() {
         this.ready = true;
+        // 優先使用 Netlify Function
+        if (_netlifySyncAvailable === true) {
+            try {
+                const result = await netlifySync.pullAll();
+                if (result && result.data) {
+                    this._mergeFromCloud(result.data);
+                    if (result.gistId) { this._gistId = result.gistId; localStorage.setItem('cw_gist_id', result.gistId); }
+                    toast('☁️ 已從雲端同步資料（自動）', 'success');
+                    return true;
+                }
+                return false;
+            } catch(e) {
+                console.warn('[☁️] Netlify Function pull 失敗，嘗試 Token 模式:', e.message);
+                // 回退到 Token 模式
+            }
+        }
+        // Token 模式（原有邏輯）
         try {
             const gid = await this._getOrCreateGist();
             if (!gid) throw new Error('無Gist');
@@ -1684,6 +1761,22 @@ const cloudSync = {
 
     async pushAll() {
         this.ready = true;
+        // 優先使用 Netlify Function（無 Token 模式）
+        if (_netlifySyncAvailable === true) {
+            try {
+                const data = this._collectAll();
+                const result = await netlifySync.pushAll(data, this._gistId);
+                if (result && result.success) {
+                    if (result.gistId) { this._gistId = result.gistId; localStorage.setItem('cw_gist_id', result.gistId); }
+                    console.log('[☁️] 數據已推送至雲端 ✓ (Netlify Function)');
+                    return true;
+                }
+            } catch(e) {
+                console.warn('[☁️] Netlify Function push 失敗，嘗試 Token 模式:', e.message);
+                // 回退到 Token 模式
+            }
+        }
+        // Token 模式（原有邏輯）
         try {
             const gid = await this._getOrCreateGist();
             if (!gid) throw new Error('無Gist');
@@ -4165,6 +4258,28 @@ window.print = function() {
         btn.innerHTML = '<button class="btn btn-danger btn-sm" id="btnBatchDel" onclick="batchDeleteQuotations()" style="display:none">🗑️ 批次刪除</button>';
         histHeader.appendChild(btn);
     }
+})();
+</script>
+<script>
+// ==================== 頁面加載後自動檢測同步方式 ====================
+(function(){
+    // 延遲執行，確保所有函數已定義
+    setTimeout(async () => {
+        if (typeof _checkNetlifySync !== 'function') return;
+        const available = await _checkNetlifySync();
+        if (available) {
+            // 使用 Netlify Function 自動同步（無需 Token）
+            console.log('[☁️] 自動同步模式：已啟用');
+            if (typeof cloudSync !== 'undefined' && typeof cloudSync.pullAll === 'function') {
+                cloudSync.pullAll().then(r => {
+                    if (r && typeof renderAll === 'function') renderAll();
+                }).catch(() => {});
+            }
+        } else {
+            // Netlify Function 不可用，使用 Token 模式（原有邏輯）
+            console.log('[☁️] Token 模式：請手動同步');
+        }
+    }, 800);
 })();
 </script>
 </body>
