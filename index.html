@@ -1474,10 +1474,11 @@ function ensureXLSX() {
 
     return new Promise(function(resolve, reject) {
         const CDN_URLS = [
-            '/xlsx.full.min.js',                  // 1️⃣ 本地檔（Netlify 本域，最可靠）
+            '/xlsx.full.min.js',                  // 1️⃣ 本地檔
             'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',  // 2️⃣ jsDelivr
             'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',            // 3️⃣ unpkg
-            'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js' // 4️⃣ cdnjs
+            'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', // 4️⃣ cdnjs
+            'https://cdn.staticaly.io/gh/nicolo-ribaudo/xlsx@master/dist/xlsx.full.min.js' // 5️⃣ 備用
         ];
 
         function tryLoad(index) {
@@ -1486,28 +1487,71 @@ function ensureXLSX() {
                 reject(new Error('XLSX 載入失敗，請檢查網絡連線'));
                 return;
             }
+            var url = CDN_URLS[index];
             var s = document.createElement('script');
-            s.src = CDN_URLS[index];
+            s.src = url;
             s.crossOrigin = 'anonymous';
             s.onload = function() {
                 if (typeof XLSX !== 'undefined') {
                     _xlsxReady = true; _xlsxLoading = false;
                     _xlsxWaiters.forEach(function(fn) { fn(); });
                     _xlsxWaiters = [];
-                    console.log('[XLSX] 已載入：' + CDN_URLS[index]);
+                    console.log('[XLSX] 已載入：' + url);
                     resolve();
                 } else {
                     tryLoad(index + 1);
                 }
             };
             s.onerror = function() {
-                console.warn('[XLSX] 載入失敗：' + CDN_URLS[index]);
+                console.warn('[XLSX] script載入失敗：' + url);
                 tryLoad(index + 1);
             };
             document.head.appendChild(s);
         }
 
         tryLoad(0);
+
+        // 備用：如果所有 script 加載都失敗，嘗試 fetch+eval 方式
+        setTimeout(function() {
+            if (_xlsxLoading && typeof XLSX === 'undefined') {
+                console.warn('[XLSX] script 標籤加載全部失敗，嘗試 fetch+eval...');
+                var fetchUrls = [
+                    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+                    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+                ];
+                function tryFetch(fi) {
+                    if (fi >= fetchUrls.length) {
+                        _xlsxLoading = false;
+                        reject(new Error('XLSX 載入失敗（含fetch備用）'));
+                        return;
+                    }
+                    fetch(fetchUrls[fi], { mode: 'no-cors' })
+                        .then(function(r) { return r.text(); })
+                        .then(function(text) {
+                            try {
+                                eval(text);
+                                if (typeof XLSX !== 'undefined') {
+                                    _xlsxReady = true; _xlsxLoading = false;
+                                    _xlsxWaiters.forEach(function(fn) { fn(); });
+                                    _xlsxWaiters = [];
+                                    console.log('[XLSX] fetch+eval 成功');
+                                    resolve();
+                                } else {
+                                    tryFetch(fi + 1);
+                                }
+                            } catch(e) {
+                                console.warn('[XLSX] eval 失敗：' + e.message);
+                                tryFetch(fi + 1);
+                            }
+                        })
+                        .catch(function() {
+                            console.warn('[XLSX] fetch 失敗：' + fetchUrls[fi]);
+                            tryFetch(fi + 1);
+                        });
+                }
+                tryFetch(0);
+            }
+        }, 8000); // 等待8秒後啟動 fetch 備用
     });
 }
 
