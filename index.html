@@ -1611,34 +1611,42 @@ function _getGHToken() {
 
 // ==================== 同步方式自動檢測 ====================
 // 優先使用 Netlify Function（無 Token 模式），失敗時回退到 Token 模式
-var _netlifySyncAvailable = null; // null = 未檢測, true = 可用, false = 不可用
+var _serverSyncAvailable = null; // null = 未檢測, true = 可用, false = 不可用
 
-async function _checkNetlifySync() {
-    if (_netlifySyncAvailable !== null) return _netlifySyncAvailable;
-    try {
-        const resp = await fetch('/.netlify/functions/cloud-sync?action=pull', {
-            method: 'GET',
-            signal: AbortSignal.timeout(3000)
-        });
-        if (resp.ok || resp.status === 404) {
-            // 404 也算是可用（Gist 不存在但 Function 正常工作）
-            _netlifySyncAvailable = true;
-            console.log('[☁️] 使用 Netlify Function 同步（無 Token 模式）');
-            return true;
-        }
-        _netlifySyncAvailable = false;
-        return false;
-    } catch(e) {
-        _netlifySyncAvailable = false;
-        console.log('[☁️] Netlify Function 不可用，使用 Token 模式');
-        return false;
+async function _checkServerSync() {
+    if (_serverSyncAvailable !== null) return _serverSyncAvailable;
+    // 優先嘗試 Vercel API Route，再嘗試 Netlify Function
+    const endpoints = [
+        '/api/cloud-sync',                    // Vercel API Route
+        '/.netlify/functions/cloud-sync'      // Netlify Function (fallback)
+    ];
+    for (const ep of endpoints) {
+        try {
+            const resp = await fetch(ep + '?action=pull', {
+                method: 'GET',
+                signal: AbortSignal.timeout(3000)
+            });
+            if (resp.ok || resp.status === 404 || resp.status === 500) {
+                // 404/500 也算是可用（Gist 不存在但 Function 正常工作）
+                _serverEndpoint = ep; // 記住可用的端點
+                _serverSyncAvailable = true;
+                console.log('[☁️] 使用伺服器端同步（無 Token 模式）：' + ep);
+                return true;
+            }
+        } catch(e) { continue; }
     }
+    _serverSyncAvailable = false;
+    console.log('[☁️] 伺服器端同步不可用，使用 Token 模式');
+    return false;
 }
 
-// Netlify Function 同步實現
-const netlifySync = {
+var _serverEndpoint = ''; // 記錄可用的端點
+
+// 伺服器端同步實現（支持 Vercel + Netlify）
+const serverSync = {
     async pullAll() {
-        const resp = await fetch('/.netlify/functions/cloud-sync?action=pull', {
+        var ep = _serverEndpoint || '/api/cloud-sync';
+        const resp = await fetch(ep + '?action=pull', {
             method: 'GET',
             signal: AbortSignal.timeout(15000)
         });
@@ -1646,7 +1654,8 @@ const netlifySync = {
         return await resp.json();
     },
     async pushAll(data, gistId) {
-        const resp = await fetch('/.netlify/functions/cloud-sync?action=push', {
+        var ep = _serverEndpoint || '/api/cloud-sync';
+        const resp = await fetch(ep + '?action=push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ data, gistId }),
@@ -1666,7 +1675,7 @@ const cloudSync = {
 
     _headers() {
         // 如果使用 Netlify Function，不需要 Token
-        if (_netlifySyncAvailable === true) return {};
+        if (_serverSyncAvailable === true) return {};
         const t = _getGHToken();
         if (!t) return {};
         return { 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json', 'Authorization': 'token ' + t };
@@ -1692,7 +1701,7 @@ const cloudSync = {
 
     async _getOrCreateGist() {
         // 如果使用 Netlify Function，直接返回已保存的 gistId（Function 會自動處理）
-        if (_netlifySyncAvailable === true) {
+        if (_serverSyncAvailable === true) {
             if (this._gistId) return this._gistId;
             // 嘗試從 localStorage 讀取
             const saved = localStorage.getItem('cw_gist_id');
@@ -1724,9 +1733,9 @@ const cloudSync = {
     async pullAll() {
         this.ready = true;
         // 優先使用 Netlify Function
-        if (_netlifySyncAvailable === true) {
+        if (_serverSyncAvailable === true) {
             try {
-                const result = await netlifySync.pullAll();
+                const result = await serverSync.pullAll();
                 if (result && result.data) {
                     this._mergeFromCloud(result.data);
                     if (result.gistId) { this._gistId = result.gistId; localStorage.setItem('cw_gist_id', result.gistId); }
@@ -1735,7 +1744,7 @@ const cloudSync = {
                 }
                 return false;
             } catch(e) {
-                console.warn('[☁️] Netlify Function pull 失敗，嘗試 Token 模式:', e.message);
+                console.warn('[☁️] 伺服器端 pull 失敗，嘗試 Token 模式:', e.message);
                 // 回退到 Token 模式
             }
         }
@@ -1762,17 +1771,17 @@ const cloudSync = {
     async pushAll() {
         this.ready = true;
         // 優先使用 Netlify Function（無 Token 模式）
-        if (_netlifySyncAvailable === true) {
+        if (_serverSyncAvailable === true) {
             try {
                 const data = this._collectAll();
-                const result = await netlifySync.pushAll(data, this._gistId);
+                const result = await serverSync.pushAll(data, this._gistId);
                 if (result && result.success) {
                     if (result.gistId) { this._gistId = result.gistId; localStorage.setItem('cw_gist_id', result.gistId); }
-                    console.log('[☁️] 數據已推送至雲端 ✓ (Netlify Function)');
+                    console.log('[☁️] 數據已推送至雲端 ✓ (伺服器端 Function)');
                     return true;
                 }
             } catch(e) {
-                console.warn('[☁️] Netlify Function push 失敗，嘗試 Token 模式:', e.message);
+                console.warn('[☁️] 伺服器端 push 失敗，嘗試 Token 模式:', e.message);
                 // 回退到 Token 模式
             }
         }
@@ -4265,8 +4274,8 @@ window.print = function() {
 (function(){
     // 延遲執行，確保所有函數已定義
     setTimeout(async () => {
-        if (typeof _checkNetlifySync !== 'function') return;
-        const available = await _checkNetlifySync();
+        if (typeof _checkServerSync !== 'function') return;
+        const available = await _checkServerSync();
         if (available) {
             // 使用 Netlify Function 自動同步（無需 Token）
             console.log('[☁️] 自動同步模式：已啟用');
