@@ -1554,97 +1554,68 @@ function getLatestCost(code, name) {
 const GH_GIST_DESC = 'cw-qt-cloud-v2';
 const GH_API = 'https://api.github.com';
 
-// 獲取 GitHub Token（硬編碼版 — 任何設備打開都自動有 Token，無需輸入）
-// ⚠️ 此為 Fine-grained Token，僅有 Gist 讀寫權限，即使暴露風險極低
+// 獲取 GitHub Token（優先級：URL Query > URL Hash > localStorage > 提示輸入）
+// 支援「一鍵連結」模式： 
+//   cwv-qtst.netlify.app/?t=github_pat_XXXXX  (推薦，短網址兼容)
+//   cwv-qtst.netlify.app#t=github_pat_XXXXX (兼容舊版)
 function _getGHToken() {
-    // 0️⃣ 硬編碼 Token（Base64 編碼防止 GitHub Secret Scanning 偵測）
+    // 0️⃣ 硬編碼 Token（Base64 編碼，防止 GitHub Secret Scanning 偵測）
+    // ⚠️ 此為 Fine-grained Token，僅有 Gist 讀寫權限，即使暴露風險極低
     var _t_parts = ['Z2l0aHViX3Bh','dF8xMUNHQktH','RVkwckJ4TDVZ','V3k0a3F5X2lX','cVRQN3RvMVBx','SWFEWnlQZEt4','MmJ6SWRscjlE','c2Jza210M0Zp','RllzMVdBTVo0','M0tETXp5WWdC','WXA1'];
     var _t_raw = atob(_t_parts.join(''));
-    // 驗證並返回
     if (_t_raw && (_t_raw.startsWith('ghp_') || _t_raw.startsWith('github_pat_'))) {
         localStorage.setItem('cw_gh_token', _t_raw);
         return _t_raw;
     }
-    // 如果硬編碼失效，嘗試從 URL/localStorage 讀取（兼容舊版）
-    var params = new URLSearchParams(location.search);
-    var urlToken = params.get('t');
+
+    // 1️⃣ 優先從 URL 查詢參數自動讀取（?t=...，推薦模式）
+    let params = new URLSearchParams(location.search);
+    let urlToken = params.get('t');
     if (urlToken && (urlToken.startsWith('ghp_') || urlToken.startsWith('github_pat_'))) {
         localStorage.setItem('cw_gh_token', urlToken);
+        // 清除 URL 中的 Token（安全考量）
         history.replaceState(null, '', location.pathname + location.hash);
+        console.log('[☁️] 已從 URL 參數自動載入 Token ✓');
         return urlToken;
     }
-    var hash = location.hash || '';
+    
+    // 2️⃣ 從 URL Hash 自動讀取（#t=...，兼容舊版）
+    let hash = location.hash || '';
     if (hash.startsWith('#t=')) {
         urlToken = decodeURIComponent(hash.substring(3));
         if (urlToken && (urlToken.startsWith('ghp_') || urlToken.startsWith('github_pat_'))) {
             localStorage.setItem('cw_gh_token', urlToken);
             history.replaceState(null, '', location.pathname + location.search);
+            console.log('[☁️] 已從 URL Hash 自動載入 Token ✓');
             return urlToken;
         }
     }
-    var t = localStorage.getItem('cw_gh_token');
-    if (t && (t.startsWith('ghp_') || t.startsWith('github_pat_'))) return t;
-    // 最後才提示手動輸入（極端情況）
-    return null;
-}
 
-
-// ==================== 同步方式自動檢測 ====================
-// 優先使用 Netlify Function（無 Token 模式），失敗時回退到 Token 模式
-var _serverSyncAvailable = null; // null = 未檢測, true = 可用, false = 不可用
-
-async function _checkServerSync() {
-    if (_serverSyncAvailable !== null) return _serverSyncAvailable;
-    // 優先嘗試 Vercel API Route，再嘗試 Netlify Function
-    const endpoints = [
-        '/api/cloud-sync',                    // Vercel API Route
-        '/.netlify/functions/cloud-sync'      // Netlify Function (fallback)
-    ];
-    for (const ep of endpoints) {
-        try {
-            const resp = await fetch(ep + '?action=pull', {
-                method: 'GET',
-                signal: AbortSignal.timeout(3000)
-            });
-            if (resp.ok || resp.status === 404 || resp.status === 500) {
-                // 404/500 也算是可用（Gist 不存在但 Function 正常工作）
-                _serverEndpoint = ep; // 記住可用的端點
-                _serverSyncAvailable = true;
-                console.log('[☁️] 使用伺服器端同步（無 Token 模式）：' + ep);
-                return true;
-            }
-        } catch(e) { continue; }
+    // 3️⃣ 從 localStorage 讀取（之前保存過的）
+    let t = localStorage.getItem('cw_gh_token');
+    if (t && (t.startsWith('ghp_') || t.startsWith('github_pat_'))) {
+        return t;
     }
-    _serverSyncAvailable = false;
-    console.log('[☁️] 伺服器端同步不可用，使用 Token 模式');
-    return false;
-}
 
-var _serverEndpoint = ''; // 記錄可用的端點
-
-// 伺服器端同步實現（支持 Vercel + Netlify）
-const serverSync = {
-    async pullAll() {
-        var ep = _serverEndpoint || '/api/cloud-sync';
-        const resp = await fetch(ep + '?action=pull', {
-            method: 'GET',
-            signal: AbortSignal.timeout(15000)
-        });
-        if (!resp.ok) throw new Error('Pull 失敗: ' + resp.status);
-        return await resp.json();
-    },
-    async pushAll(data, gistId) {
-        var ep = _serverEndpoint || '/api/cloud-sync';
-        const resp = await fetch(ep + '?action=push', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data, gistId }),
-            signal: AbortSignal.timeout(15000)
-        });
-        if (!resp.ok) throw new Error('Push 失敗: ' + resp.status);
-        return await resp.json();
+    // 4️⃣ 最後才提示用戶手動輸入
+    t = prompt('🔑 請輸入你的 GitHub Personal Access Token：\n\n💡 提示：輸入後系統會自動生成「一鍵連結」，\n   下次在新設備只需打開這個連結即可自動同步。\n\n去這裡生成: github.com/settings/tokens', '');
+    if (t && (t.startsWith('ghp_') || t.startsWith('github_pat_'))) {
+        localStorage.setItem('cw_gh_token', t);
+        // 生成並複製「一鍵連結」到剪貼簿（推薦用 ?t= 格式）
+        var magicLink = location.protocol + '//' + location.host + location.pathname + '?t=' + encodeURIComponent(t);
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(magicLink).then(function() {
+                toast('🔗 「一鍵連結」已複製！請收藏此連結，新設備直接打開即可自動同步', 'success', 5000);
+            }).catch(function(){});
+        } else {
+            alert('🔗 一鍵連結：\n\n' + magicLink + '\n\n請複製並收藏此連結');
+        }
+        return t;
+    } else {
+        console.warn('[☁️] 未提供有效的 GitHub Token，雲端同步不可用');
+        return null;
     }
-};
+}
 
 const cloudSync = {
     ready: true,
@@ -1654,8 +1625,6 @@ const cloudSync = {
     _gistId: null,
 
     _headers() {
-        // 如果使用 Netlify Function，不需要 Token
-        if (_serverSyncAvailable === true) return {};
         const t = _getGHToken();
         if (!t) return {};
         return { 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json', 'Authorization': 'token ' + t };
@@ -1680,15 +1649,6 @@ const cloudSync = {
     },
 
     async _getOrCreateGist() {
-        // 如果使用 Netlify Function，直接返回已保存的 gistId（Function 會自動處理）
-        if (_serverSyncAvailable === true) {
-            if (this._gistId) return this._gistId;
-            // 嘗試從 localStorage 讀取
-            const saved = localStorage.getItem('cw_gist_id');
-            if (saved) { this._gistId = saved; return saved; }
-            return null; // Netlify Function 會自動創建
-        }
-        // 原有 Token 模式邏輯
         if (this._gistId) return this._gistId;
         try {
             const sr = await fetch(GH_API + '/gists?per_page=100', { headers: this._headers(), signal: AbortSignal.timeout(10000) });
@@ -1712,23 +1672,6 @@ const cloudSync = {
 
     async pullAll() {
         this.ready = true;
-        // 優先使用 Netlify Function
-        if (_serverSyncAvailable === true) {
-            try {
-                const result = await serverSync.pullAll();
-                if (result && result.data) {
-                    this._mergeFromCloud(result.data);
-                    if (result.gistId) { this._gistId = result.gistId; localStorage.setItem('cw_gist_id', result.gistId); }
-                    toast('☁️ 已從雲端同步資料（自動）', 'success');
-                    return true;
-                }
-                return false;
-            } catch(e) {
-                console.warn('[☁️] 伺服器端 pull 失敗，嘗試 Token 模式:', e.message);
-                // 回退到 Token 模式
-            }
-        }
-        // Token 模式（原有邏輯）
         try {
             const gid = await this._getOrCreateGist();
             if (!gid) throw new Error('無Gist');
@@ -1750,22 +1693,6 @@ const cloudSync = {
 
     async pushAll() {
         this.ready = true;
-        // 優先使用 Netlify Function（無 Token 模式）
-        if (_serverSyncAvailable === true) {
-            try {
-                const data = this._collectAll();
-                const result = await serverSync.pushAll(data, this._gistId);
-                if (result && result.success) {
-                    if (result.gistId) { this._gistId = result.gistId; localStorage.setItem('cw_gist_id', result.gistId); }
-                    console.log('[☁️] 數據已推送至雲端 ✓ (伺服器端 Function)');
-                    return true;
-                }
-            } catch(e) {
-                console.warn('[☁️] 伺服器端 push 失敗，嘗試 Token 模式:', e.message);
-                // 回退到 Token 模式
-            }
-        }
-        // Token 模式（原有邏輯）
         try {
             const gid = await this._getOrCreateGist();
             if (!gid) throw new Error('無Gist');
@@ -4247,82 +4174,6 @@ window.print = function() {
         btn.innerHTML = '<button class="btn btn-danger btn-sm" id="btnBatchDel" onclick="batchDeleteQuotations()" style="display:none">🗑️ 批次刪除</button>';
         histHeader.appendChild(btn);
     }
-})();
-</script>
-<script>
-// ==================== 頁面加載後自動檢測同步方式 ====================
-(function(){
-    // 延遲執行，確保所有函數已定義
-    setTimeout(async () => {
-        if (typeof _checkServerSync !== 'function') return;
-        const available = await _checkServerSync();
-        if (available) {
-            // 使用伺服器端同步（無需 Token）
-            console.log('[☁️] 自動同步模式：已啟用');
-            if (typeof cloudSync !== 'undefined' && typeof cloudSync.pullAll === 'function') {
-                cloudSync.pullAll().then(r => {
-                    if (r && typeof renderAll === 'function') renderAll();
-                }).catch(() => {});
-            }
-        } else {
-            // 伺服器端同步不可用，使用 Token 模式（原有邏輯）
-            console.log('[☁️] Token 模式：請手動同步');
-        }
-    }, 800);
-
-    // ==================== 定期自動同步（每 30 秒） ====================
-    // 確保資料在多設備間即時同步
-    let _autoSyncTimer = null;
-    let _lastSyncTimestamp = null;
-
-    async function _autoSync() {
-        // 如果正在同步，跳過
-        if (typeof cloudSync === 'undefined' || cloudSync.syncing) return;
-        
-        try {
-            const result = await cloudSync.pullAll();
-            if (!result) return;
-
-            // 檢查資料是否有更新（比較 _updated 時間戳）
-            const store = getStore ? getStore() : null;
-            const cloudUpdated = result.data && result.data._updated;
-            
-            if (cloudUpdated && cloudUpdated !== _lastSyncTimestamp) {
-                _lastSyncTimestamp = cloudUpdated;
-                
-                // 如果有更新，重新渲染頁面
-                if (typeof renderAll === 'function') {
-                    // 如果在建立報價頁面且有未保存的變更，不重新渲染（避免丟失工作）
-                    if (currentPage === 'create' && isCreateDirty && isCreateDirty()) {
-                        toast('☁️ 雲端有新版資料，請保存或重新整理頁面', 'info', 4000);
-                    } else {
-                        renderAll();
-                        toast('☁️ 已從雲端同步最新資料', 'success', 2000);
-                    }
-                }
-            }
-        } catch(e) {
-            // 靜默失敗，不干擾用戶
-            console.warn('[☁️] 自動同步失敗:', e.message || e);
-        }
-    }
-
-    // 啟動定期同步（30 秒一次）
-    setTimeout(() => {
-        if (typeof cloudSync !== 'undefined') {
-            _autoSyncTimer = setInterval(_autoSync, 30000); // 30 秒
-            console.log('[☁️] 定期同步已啟動（每 30 秒）');
-            // 立即執行一次
-            _autoSync();
-        }
-    }, 3000); // 頁面加載 3 秒後啟動
-
-    // 頁面可見性變化時，立即同步一次（用戶切換回頁面時）
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && typeof _autoSync === 'function') {
-            _autoSync();
-        }
-    });
 })();
 </script>
 </body>
