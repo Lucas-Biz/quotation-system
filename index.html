@@ -1559,15 +1559,6 @@ const GH_API = 'https://api.github.com';
 //   cwv-qtst.netlify.app/?t=github_pat_XXXXX  (推薦，短網址兼容)
 //   cwv-qtst.netlify.app#t=github_pat_XXXXX (兼容舊版)
 function _getGHToken() {
-    // 0️⃣ 硬編碼 Token（Base64 分段編碼，避免 GitHub Secret Scanning 偵測）
-    var _t_raw = null;
-    try {
-        _t_raw = atob('Z2l0aHViX3Bh' + 'dF8xMUNHQktH' + 'RVkwckJ4TDVZ' + 'V3k0a3F5X2lX' + 'cVRQN3RvMVBx' + 'SWFEWnlQZEt4' + 'MmJ6SWRscjlE' + 'c2Jza210M0Zp' + 'RllzMVdBTVo0' + 'M0tETXp5WWdC' + 'WXA1');
-    } catch(e) {}
-    if (_t_raw && (_t_raw.startsWith('ghp_') || _t_raw.startsWith('github_pat_'))) {
-        localStorage.setItem('cw_gh_token', _t_raw);
-        return _t_raw;
-    }
     // 1️⃣ 優先從 URL 查詢參數自動讀取（?t=...，推薦模式）
     let params = new URLSearchParams(location.search);
     let urlToken = params.get('t');
